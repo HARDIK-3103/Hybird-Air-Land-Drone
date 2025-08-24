@@ -1,0 +1,224 @@
+#include <SoftwareSerial.h>
+#include <SPI.h>
+#include <Servo.h>
+#include <NewPing.h>
+SoftwareSerial BT_Serial(2, 3); // RX, TX
+#define enA 10//Enable1 L298 Pin enA 
+#define in1 9 //Motor1  L298 Pin in1 
+#define in2 8 //Motor1  L298 Pin in2
+#define in3 7 //Motor2  L298 Pin in3 
+#define in4 6 //Motor2  L298 Pin in4 
+#define enB 5 //Enable2 L298 Pin enB 
+#define servo A4
+#define R_S A0 //ir sensor Right
+#define L_S A1 //ir sensor Left
+#define echo A2    //Echo pin
+#define trigger A3 //Trigger pin
+int distance_L, distance_F = 30, distance_R;
+long distance;
+int set = 20;
+int bt_data; // variable to receive data from the serial port 
+int Speed = 130; 
+
+int mode=0;
+void setup(){ // put your setup code here, to run once
+  pinMode(R_S, INPUT); //H declare ir sensor as input  
+  pinMode(L_S, INPUT); //A declare ir sensor as input
+  pinMode(echo, INPUT ); //R declare ultrasonic sensor Echo pin as input
+  pinMode(trigger, OUTPUT); // declare ultrasonic sensor Trigger pin as Output  
+  pinMode(enA, OUTPUT); //D declare as output for L298 Pin enA 
+  pinMode(in1, OUTPUT); //I declare as output for L298 Pin in1 
+  pinMode(in2, OUTPUT); //K declare as output for L298 Pin in2 
+  pinMode(in3, OUTPUT); //G declare as output for L298 Pin in3   
+  pinMode(in4, OUTPUT); // declare as output for L298 Pin in4 
+  pinMode(enB, OUTPUT); // declare as output for L298 Pin enB 
+  Serial.begin(9600); // start serial communication at 9600bps
+  BT_Serial.begin(9600); 
+  pinMode(servo, OUTPUT);
+  for (int angle = 70; angle <= 140; angle += 5)  {
+    servoPulse(servo, angle);  }
+  for (int angle = 140; angle >= 0; angle -= 5)  {
+    servoPulse(servo, angle);  }
+  for (int angle = 0; angle <= 70; angle += 5)  {
+    servoPulse(servo, angle);  }
+  delay(500);
+}
+
+void loop() {
+  // Bluetooth Communication
+  if (BT_Serial.available() > 0) {
+    int received = BT_Serial.parseInt();
+    Serial.print("Received Command: ");
+    Serial.println(received);
+
+    // Mode Commands
+    if (received == 8) {
+      mode = 0;
+      Stop();
+      delay(90);
+      BT_Serial.println("FB:100 Manual Mode.");  // Manual Mode
+    }
+    else if (received == 9) {
+      mode = 1;
+      Speed = 130;
+      delay(90);
+      BT_Serial.println("FB:200 Object Follower Mode.");  // Object Follower
+    }
+    else if (received == 10) {
+      mode = 2;
+      Speed = 255;
+      delay(90);
+      BT_Serial.println("FB:300 Obstacle Avoidance Mode.");  // Obstacle Avoidance
+    }
+    else if (received > 20) {
+      Speed = received;
+    }
+    else {
+      // Only save directional commands if in manual mode
+      if (mode == 0) {
+        bt_data = received;  // Now 1–7 will persist only in manual mode
+      }
+    }
+  }
+  analogWrite(enA, Speed);
+  analogWrite(enB, Speed);
+  if (mode == 0) {
+    if (bt_data == 1) { forward(); }
+    else if (bt_data == 2) { backward(); }
+    else if (bt_data == 3) { turnLeft(); }
+    else if (bt_data == 4) { turnRight(); }
+    else if (bt_data == 5) { Stop(); }
+    else if (bt_data == 6) { turnLeft(); delay(400); bt_data = 5; }
+    else if (bt_data == 7) { turnRight(); delay(400); bt_data = 5; }
+  }
+  if (mode == 1) {
+    // Object Follower HG
+    int rightIR = analogRead(R_S);
+    int leftIR = analogRead(L_S);
+    int threshold = 500;
+    long distance = Ultrasonic_read();
+    int maxSafeDistance = 8;
+    int minSafeDistance = 16;
+
+    if (leftIR < threshold && rightIR < threshold) {
+      if (distance > maxSafeDistance && distance <= minSafeDistance) {
+        forward();
+      } else {
+        Stop();
+        delay(90);
+        if (mode==1){BT_Serial.println("FB:400 Obstacle Detected!.");}
+      }
+    }
+    else if (leftIR < threshold && rightIR > threshold) {
+      turnRight(); delay(300); Stop();
+    }
+    else if (leftIR > threshold && rightIR < threshold) {
+      turnLeft(); delay(300); Stop();
+    }
+    else {
+      if (distance < maxSafeDistance) {
+        forward();
+      } else {
+        backward(); delay(350); Stop();
+      }
+    }
+  }
+
+  if (mode == 2) {
+    // Obstacle Avoiding Control HG
+    distance_F = Ultrasonic_read();
+    Serial.print("S=");
+    Serial.println(distance_F);
+    if (distance_F > set) {
+      forward();
+    } else {
+      delay(90);
+      if (mode==2){BT_Serial.println("FB:400 Obstacle Detected!.");}
+      Check_side();
+    }
+  }
+
+  delay(10);
+}
+
+void servoPulse (int pin, int angle){
+int pwm = (angle*11) + 500;      // Convert angle to microseconds
+ digitalWrite(pin, HIGH);
+ delayMicroseconds(pwm);
+ digitalWrite(pin, LOW);
+ delay(50);                  
+}
+//Ultrasonic_read HG
+long Ultrasonic_read(){
+  digitalWrite(trigger, LOW);
+  delayMicroseconds(2);
+  digitalWrite(trigger, HIGH);
+  delayMicroseconds(10);
+  distance = pulseIn (echo, HIGH);
+  return distance / 29 / 2;
+}
+void compareDistance(){
+       if (distance_L > distance_R){
+  turnLeft();
+  delay(350);
+  }
+  else if (distance_R > distance_L){
+  turnRight();
+  delay(350);
+  }
+  else{
+  backward();
+  delay(300);
+  turnRight();
+  delay(600);
+  }
+}
+void Check_side(){
+    Stop();
+    delay(100);
+ for (int angle = 70; angle <= 140; angle += 5)  {
+   servoPulse(servo, angle);  }
+    delay(300);
+    distance_L = Ultrasonic_read();
+    delay(100);
+  for (int angle = 140; angle >= 0; angle -= 5)  {
+   servoPulse(servo, angle);  }
+    delay(500);
+    distance_R = Ultrasonic_read();
+    delay(100);
+ for (int angle = 0; angle <= 70; angle += 5)  {
+   servoPulse(servo, angle);  }
+    delay(300);
+    compareDistance();
+}
+
+void forward(){  
+digitalWrite(in1, LOW); //RIGHT Motor backward Pin 
+digitalWrite(in2, HIGH); //RIGHT Motor forward Pin 
+digitalWrite(in3, LOW); //LEFT Motor BACKWARD Pin 
+digitalWrite(in4, HIGH); //LEFT Motor FORWARD Pin 
+}
+void backward(){ 
+digitalWrite(in1, HIGH); 
+digitalWrite(in2, LOW); 
+digitalWrite(in3, HIGH); 
+digitalWrite(in4, LOW);  
+}
+void turnRight(){ 
+digitalWrite(in1, HIGH);
+digitalWrite(in2, LOW); 
+digitalWrite(in3, LOW); 
+digitalWrite(in4, HIGH); 
+}
+void turnLeft(){ 
+digitalWrite(in1, LOW); 
+digitalWrite(in2, HIGH); 
+digitalWrite(in3, HIGH); 
+digitalWrite(in4, LOW); 
+}
+void Stop(){ 
+digitalWrite(in1, LOW); 
+digitalWrite(in2, LOW); 
+digitalWrite(in3, LOW); 
+digitalWrite(in4, LOW); 
+}
